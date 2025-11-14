@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>神経衰弱ゲーム（ランキング付き）</title>
+
+<style>
+  body {
+    font-family: sans-serif;
+    text-align: center;
+    background: #f5f5f5;
+    margin: 0;
+    padding: 20px;
+  }
+  h1 { margin-bottom: 5px; }
+  #game-board {
+    width: min(500px, 90%);
+    margin: 20px auto;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .card {
+    background: #2d89ef;
+    height: 110px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: white;
+    font-size: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.3s;
+  }
+  .card.flipped, .card.matched {
+    background: #fff;
+    color: #333;
+    cursor: default;
+  }
+  #restart {
+    padding: 12px 24px;
+    font-size: 18px;
+    margin-top: 20px;
+    cursor: pointer;
+  }
+  #ranking {
+    width: min(500px, 95%);
+    margin: 40px auto;
+    background: #fff;
+    padding: 15px;
+    border-radius: 10px;
+    text-align: left;
+  }
+  .rank-item {
+    padding: 4px 0;
+    border-bottom: 1px solid #ddd;
+  }
+</style>
+</head>
+<body>
+
+<h1>神経衰弱ゲーム</h1>
+<p id="status">カードをめくってペアを探そう！</p>
+
+<div id="game-board"></div>
+<button id="restart">リスタート</button>
+
+<div id="ranking">
+  <h2>ランキング（上位10名）</h2>
+  <div id="ranking-list">読み込み中…</div>
+</div>
+
+<script type="module">
+
+/*************************************************
+ * 🔥 Firebase CDN モジュールを正しく import
+ *************************************************/
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import {
+  getFirestore, collection, addDoc, query, orderBy, limit, getDocs
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+/*************************************************
+ * 🔥 あなたの Firebase Config
+ *************************************************/
+const firebaseConfig = {
+  apiKey: "AIzaSyDPuHfKR5KM595P-mYEmjTu5QGCxXLNQwY",
+  authDomain: "shinkei-cb6d0.firebaseapp.com",
+  projectId: "shinkei-cb6d0",
+  storageBucket: "shinkei-cb6d0.firebasestorage.app",
+  messagingSenderId: "1024505518054",
+  appId: "1:1024505518054:web:89195c62c36e860c256827"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+/*************************************************
+ * 🔵 ゲーム処理
+ *************************************************/
+const board = document.getElementById("game-board");
+const statusText = document.getElementById("status");
+const restartBtn = document.getElementById("restart");
+const rankingList = document.getElementById("ranking-list");
+
+const icons = ["🍎","🍌","🍇","🍒","🥝","🍍","🍉","🍑"];
+
+let firstCard = null;
+let secondCard = null;
+let cards = [];
+let lock = false;
+let matchedCount = 0;
+let startTime;
+
+function initGame() {
+  board.innerHTML = "";
+  matchedCount = 0;
+  statusText.textContent = "カードをめくってペアを探そう！";
+  startTime = Date.now();
+
+  cards = [...icons, ...icons]
+    .sort(() => Math.random() - 0.5)
+    .map((icon, i) => {
+      const div = document.createElement("div");
+      div.classList.add("card");
+      div.dataset.icon = icon;
+      div.dataset.index = i;
+      div.addEventListener("click", flipCard);
+      board.appendChild(div);
+      return div;
+    });
+}
+
+function flipCard() {
+  if (lock) return;
+  if (this.classList.contains("flipped")) return;
+
+  this.textContent = this.dataset.icon;
+  this.classList.add("flipped");
+
+  if (!firstCard) {
+    firstCard = this;
+    return;
+  }
+
+  secondCard = this;
+  lock = true;
+
+  checkMatch();
+}
+
+function checkMatch() {
+  if (firstCard.dataset.icon === secondCard.dataset.icon) {
+
+    firstCard.classList.add("matched");
+    secondCard.classList.add("matched");
+
+    matchedCount++;
+
+    if (matchedCount === icons.length) {
+      const time = ((Date.now() - startTime) / 1000).toFixed(1);
+      statusText.textContent = `クリア！おめでとう🎉（${time} 秒）`;
+
+      saveScore(Number(time));
+    }
+
+    resetPair();
+  } else {
+    setTimeout(() => {
+      firstCard.classList.remove("flipped");
+      secondCard.classList.remove("flipped");
+      firstCard.textContent = "";
+      secondCard.textContent = "";
+      resetPair();
+    }, 900);
+  }
+}
+
+function resetPair() {
+  firstCard = null;
+  secondCard = null;
+  lock = false;
+}
+
+restartBtn.addEventListener("click", initGame);
+initGame();
+
+/*************************************************
+ * 🔥 Firestore: スコア保存
+ *************************************************/
+async function saveScore(time) {
+  const name = prompt("名前を入力してください（ランキング用）", "ななし");
+  if (!name) return;
+
+  await addDoc(collection(db, "memory-ranking"), {
+    name: name,
+    time: time,
+    createdAt: Date.now()
+  });
+
+  loadRanking();
+}
+
+/*************************************************
+ * 🏆 Firestore: ランキング読み込み
+ *************************************************/
+async function loadRanking() {
+  const q = query(
+    collection(db, "memory-ranking"),
+    orderBy("time", "asc"),
+    limit(10)
+  );
+
+  const snap = await getDocs(q);
+  rankingList.innerHTML = "";
+
+  snap.forEach(doc => {
+    const d = doc.data();
+    const div = document.createElement("div");
+    div.classList.add("rank-item");
+    div.textContent = `${d.name} : ${d.time} 秒`;
+    rankingList.appendChild(div);
+  });
+}
+
+loadRanking();
+
+</script>
+
+</body>
+</html>
+
